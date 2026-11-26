@@ -20,6 +20,7 @@ class ScreenStateStore:
                 initial_revision TEXT NOT NULL REFERENCES screen_editions(revision),
                 active_revision TEXT NOT NULL REFERENCES screen_editions(revision),
                 closed INTEGER NOT NULL DEFAULT 0,
+                cutover_epoch INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (show, screen)
             );
             CREATE TABLE IF NOT EXISTS lit_events (
@@ -40,11 +41,27 @@ class ScreenStateStore:
                 request TEXT NOT NULL,
                 revision TEXT NOT NULL REFERENCES screen_editions(revision),
                 epoch INTEGER NOT NULL,
+                applied INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (show, screen, request),
                 UNIQUE (show, screen, epoch),
                 FOREIGN KEY (show, screen) REFERENCES sessions(show, screen)
             );
         ''')
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add cutover bookkeeping columns to databases created before the fix."""
+        with self.database.transaction(write=True) as connection:
+            session_columns = {
+                row['name'] for row in connection.execute('PRAGMA table_info(sessions)').fetchall()
+            }
+            if 'cutover_epoch' not in session_columns:
+                connection.execute('ALTER TABLE sessions ADD COLUMN cutover_epoch INTEGER NOT NULL DEFAULT 0')
+            cutover_columns = {
+                row['name'] for row in connection.execute('PRAGMA table_info(cutovers)').fetchall()
+            }
+            if 'applied' not in cutover_columns:
+                connection.execute('ALTER TABLE cutovers ADD COLUMN applied INTEGER NOT NULL DEFAULT 0')
 
     def transaction(self, *, write: bool = True):
         return self.database.transaction(write=write)
@@ -105,6 +122,13 @@ class ScreenStateStore:
         ''', (show, screen, cue, segment)).fetchone()
 
     @staticmethod
+    def cue_opening_row(connection, show: str, screen: str, cue: str):
+        return connection.execute('''
+            SELECT * FROM lit_events
+            WHERE show = ? AND screen = ? AND cue = ? AND segment = 1
+        ''', (show, screen, cue)).fetchone()
+
+    @staticmethod
     def last_event(connection, show: str, screen: str):
         return connection.execute('''
             SELECT * FROM lit_events WHERE show = ? AND screen = ? ORDER BY sequence DESC LIMIT 1
@@ -141,15 +165,26 @@ class ScreenStateStore:
         ''', (show, screen, request, revision, epoch))
 
     @staticmethod
-    def activate_edition(connection, show: str, screen: str, revision: str) -> None:
+    def mark_cutover_applied(connection, show: str, screen: str,
+                             request: str, epoch: int) -> None:
         connection.execute('''
-            UPDATE sessions SET active_revision = ? WHERE show = ? AND screen = ?
-        ''', (revision, show, screen))
+            UPDATE cutovers SET applied = 1
+            WHERE show = ? AND screen = ? AND request = ?
+        ''', (show, screen, request))
+        # The active draft only advances; an older cutover that settles after a
+        # newer one is still recorded as applied history without rolling back.
+        connection.execute('''
+            UPDATE sessions SET active_revision = (
+                SELECT revision FROM cutovers
+                WHERE show = ? AND screen = ? AND request = ?
+            ), cutover_epoch = ?
+            WHERE show = ? AND screen = ? AND ? > cutover_epoch
+        ''', (show, screen, request, epoch, show, screen, epoch))
 
     def read_cutover(self, show: str, screen: str, request: str):
         with self.transaction(write=False) as connection:
-            session = self._session_row(connection, show, screen)
+            self._session_row(connection, show, screen)
             row = self.cutover_row(connection, show, screen, request)
-            if row is None or session is None or session['active_revision'] != row['revision']:
+            if row is None or not row['applied']:
                 return None
             return row

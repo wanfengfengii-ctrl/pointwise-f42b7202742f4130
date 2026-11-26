@@ -30,4 +30,8 @@ class Cutover:
                 raise missing('correction has not been prepared on this screen')
             if session['closed']:
                 raise conflict('the screen session is closed')
-            self.state.activate_edition(connection, show, screen, prepared['revision'])
+            if prepared['applied']:
+                return
+            self.state.mark_cutover_applied(
+                connection, show, screen, request, prepared['epoch']
+            )

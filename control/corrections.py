@@ -24,12 +24,16 @@ def correct(runtime: Runtime, show_id: str, screen: str,
         target = runtime.editions.get(revision)
         check_compatibility(initial, target)
         existing = runtime.receipts.accept_correction(show_id, screen, request, revision)
+    # Push every not-yet-confirmed correction up to and including this request to
+    # the screen. The screen alone decides when a cutover is actually applied;
+    # dispatch must not be marked confirmed without that evidence.
     for pending in runtime.receipts.pending(show_id):
         if pending.epoch > existing.epoch:
             break
         runtime.screen.prepare_cutover(pending, runtime.editions.get(pending.revision))
         runtime.screen.apply_cutover(pending)
-        runtime.receipts.record_dispatch(pending.show, pending.request)
+        if runtime.screen.find_cutover(show_id, pending.screen, pending.request) is not None:
+            runtime.receipts.record_dispatch(pending.show, pending.request)
     return runtime.receipts.get_correction(show_id, request)
 
 

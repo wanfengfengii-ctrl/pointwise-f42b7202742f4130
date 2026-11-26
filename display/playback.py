@@ -14,6 +14,7 @@ class DisplayCommand:
     cue: str
     segment: int
     revision: str | None = None
+    cutover_epoch: int = 0
 
 
 def _next_segment(edition: FrozenEdition, last) -> tuple[str, int] | None:
@@ -49,7 +50,18 @@ class Playback:
             initial = self.state.edition(connection, session['initial_revision'])
             if _next_segment(initial, last) != (cue, segment):
                 raise conflict('requested segment is out of playback order')
-            revision = session['active_revision']
+            if segment == 1:
+                # An opening command carries the cutover generation known to the
+                # control desk. Commands delayed past a later cutover are stale,
+                # even when the active revision number happens to match again.
+                if command.cutover_epoch != session['cutover_epoch']:
+                    raise conflict('opening command has expired')
+                revision = command.revision
+            else:
+                # Once a cue is open, every tail segment keeps the revision that
+                # its first segment actually lit with, regardless of later cuts.
+                opening = self.state.cue_opening_row(connection, show, screen, cue)
+                revision = opening['revision']
             edition = self.state.edition(connection, revision)
             candidate = self.preloads.get(show, screen, cue, segment, revision)
             segment_data = candidate if candidate is not None else edition.get_segment(cue, segment)

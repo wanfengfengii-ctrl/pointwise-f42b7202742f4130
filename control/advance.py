@@ -48,9 +48,14 @@ def advance(runtime: Runtime, show_id: str, screen: str, cue: str, segment: int)
         return _result(runtime, event)
     waiting = AdvanceResult('pending', *identity)
     if segment == 1:
-        revision, _ = runtime.receipts.opening_revision(show_id, show.initial_revision)
-        command = DisplayCommand(*identity, revision)
+        # An unopened cue waits while any correction for the show is not yet
+        # confirmed on the screen; the operator must re-advance after it settles.
+        if runtime.receipts.pending(show_id):
+            return waiting
+        revision, epoch = runtime.receipts.opening_revision(show_id, show.initial_revision)
+        command = DisplayCommand(*identity, revision, epoch)
     else:
+        # Tail segments carry no revision: the screen keeps the cue's opening draft.
         command = DisplayCommand(*identity)
     runtime.screen.send_segment(command)
     event = _screen_fact(runtime, identity)
