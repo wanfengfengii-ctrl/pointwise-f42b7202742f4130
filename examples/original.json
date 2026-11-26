@@ -1,0 +1,7 @@
+{
+  "width": 6,
+  "cues": [
+    {"cue": "C17", "order": 17, "segments": ["稍候 开灯", "请入座"]},
+    {"cue": "C18", "order": 18, "segments": ["左侧入"]}
+  ]
+}
